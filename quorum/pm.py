@@ -18,7 +18,7 @@ import json
 from typing import Any
 
 from .llm import LLM
-from .types import DebateTurn, Proposal, Vote
+from .types import ChairNote, DebateTurn, Proposal, Vote
 
 _SYSTEM = """You are the portfolio manager and chair of an investment committee.
 
@@ -61,11 +61,18 @@ def synthesise(
     horizon_days: int = 5,
     atr_stop_multiple: float = 2.0,
     reward_risk: float = 2.0,
-) -> Proposal | None:
+) -> tuple[Proposal | None, ChairNote | None]:
+    """Returns (proposal, chair_note) -- exactly one is non-None on any path
+    that reached a verdict. `chair_note` carries the chair's stance,
+    confidence, rationale and dissent for a flat call, so "no trade" is still
+    a fully explained decision rather than a silent None. Both come back None
+    only when no verdict was reached at all (no usable price, or the chair
+    call itself failed) -- there is no rationale to attach in those cases.
+    """
     price = float(private.get("last_close") or 0)
     atr_pct = float(private.get("atr_pct") or 2.0)
     if price <= 0:
-        return None
+        return None, None
 
     brief = {
         "votes": [
@@ -95,18 +102,25 @@ def synthesise(
             temperature=0.2,
         )
     except Exception:
-        return None
+        return None, None
+
+    if data.get("_parse_error"):
+        return None, None
 
     stance = str(data.get("stance", "flat")).lower()
-    if stance == "flat" or data.get("_parse_error"):
-        return None
-
     try:
         confidence = float(data.get("confidence", 0.5))
         conviction = float(data.get("conviction_size", 0.5))
     except (TypeError, ValueError):
         confidence, conviction = 0.5, 0.5
     conviction = max(0.1, min(1.0, conviction))
+    rationale = str(data.get("rationale", ""))[:900]
+    dissent = str(data.get("dissent", ""))[:600]
+
+    if stance == "flat":
+        return None, ChairNote(
+            stance=stance, confidence=confidence, rationale=rationale, dissent=dissent
+        )
 
     # ------------------------------------------------------- numbers in Python
     # Stop distance scales with the asset's own recent range, so a quiet stock
@@ -137,6 +151,6 @@ def synthesise(
         take_profit=round(target, 2 if "/" not in symbol else 6),
         horizon_days=horizon_days,
         confidence=confidence,
-        rationale=str(data.get("rationale", ""))[:900],
-        dissent=str(data.get("dissent", ""))[:600],
-    )
+        rationale=rationale,
+        dissent=dissent,
+    ), None

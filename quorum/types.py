@@ -81,6 +81,22 @@ class Proposal:
 
 
 @dataclass
+class ChairNote:
+    """The chair's verdict when it did NOT propose a trade.
+
+    A flat stance is a real committee outcome, argued for like any other --
+    losing it to a bare `None` was the bug. This carries the same fields a
+    proposal would have (minus the numbers, since none were computed) so a
+    flat decision is just as auditable as a traded one.
+    """
+
+    stance: Stance
+    confidence: float
+    rationale: str
+    dissent: str = ""
+
+
+@dataclass
 class GateDecision:
     """The risk officer's ruling. Deterministic, and always explained."""
 
@@ -112,6 +128,7 @@ class DecisionRecord:
     executed_order_id: str | None = None
     outcome: dict[str, Any] | None = None   # filled in later by calibration.py
     run_id: str = ""
+    chair_note: ChairNote | None = None     # set when the chair went flat, in place of a proposal
 
     def to_json(self) -> str:
         return json.dumps(asdict(self), default=str)

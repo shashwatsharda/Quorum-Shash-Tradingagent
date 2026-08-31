@@ -100,8 +100,19 @@ with tab1:
                 "The losing argument is kept on the record on purpose. A decision log "
                 "containing only the winning case is a press release, not a record."
             )
+    elif latest.get("chair_note"):
+        note = latest["chair_note"]
+        st.subheader("Chair's verdict: flat")
+        st.markdown(f"**FLAT** · confidence {note['confidence']:.0%}")
+        st.write(note["rationale"])
+        if note.get("dissent"):
+            st.info(f"**Recorded dissent:** {note['dissent']}")
+        st.caption(
+            "\"Flat\" is a fully argued committee outcome, not a shrug — "
+            "the reasoning above is why no trade was the right call."
+        )
     else:
-        st.info("Committee landed flat. No proposal — which is a legitimate outcome.")
+        st.info("No verdict was reached (bad price data or a failed chair call).")
 
 # --------------------------------------------------------------- risk gate
 with tab2:

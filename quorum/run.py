@@ -98,7 +98,7 @@ def scan(cfg: dict, dry_run: bool = False, symbols: list[str] | None = None) -> 
 
         debate = run_debate(llm, symbol, votes) if cfg.get("debate", True) else []
 
-        proposal = synthesise(
+        proposal, chair_note = synthesise(
             llm, symbol, votes, debate, cons, ev.private, equity,
             cfg.get("horizon_days", 5),
             cfg.get("atr_stop_multiple", 2.0),
@@ -108,7 +108,12 @@ def scan(cfg: dict, dry_run: bool = False, symbols: list[str] | None = None) -> 
         gate = None
         order_id = None
         if proposal is None:
-            print("  PM: no trade (committee landed flat)")
+            if chair_note is not None:
+                print(f"  PM: FLAT ({chair_note.confidence:.0%} confidence) — {chair_note.rationale}")
+                if chair_note.dissent:
+                    print(f"      dissent: {chair_note.dissent}")
+            else:
+                print("  PM: no trade (no verdict reached — bad price data or a failed chair call)")
         else:
             print(f"  PM: {proposal.side.upper()} {proposal.qty:.4f} @ ~{proposal.entry_ref_price:.2f} "
                   f"stop {proposal.stop_price}  conf {proposal.confidence:.0%}")
@@ -135,6 +140,7 @@ def scan(cfg: dict, dry_run: bool = False, symbols: list[str] | None = None) -> 
         log.append(DecisionRecord(
             ts=utcnow(), symbol=symbol, votes=votes, debate=debate,
             proposal=proposal, gate=gate, executed_order_id=order_id, run_id=run_id,
+            chair_note=chair_note,
         ))
 
     print("\n" + "=" * 72)
