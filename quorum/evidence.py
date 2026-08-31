@@ -210,8 +210,14 @@ def build_evidence(
     symbol: str,
     benchmark: str = "SPY",
     lookback_days: int = 200,
+    as_of: str | None = None,
 ) -> EvidenceBundle:
-    bars = api.bars(symbol, "1Day", lookback_days)
+    """`as_of`: build this bundle as it would have looked on that YYYY-MM-DD
+    date -- bars, news, and regime all stop at that date's close, and headline
+    age is measured against it instead of the real current time. This is what
+    makes backfill lookahead-safe rather than just "historical-flavoured."
+    """
+    bars = api.bars(symbol, "1Day", lookback_days, as_of=as_of)
     df = bars_to_frame(bars)
 
     # --- technical packet: anonymised, price-derived only
@@ -219,14 +225,15 @@ def build_evidence(
 
     # --- narrative packet: headlines only, scrubbed of price and identity
     try:
-        raw_news = api.news([symbol], limit=15, lookback_days=7)
+        raw_news = api.news([symbol], limit=15, lookback_days=7, as_of=as_of)
     except Exception:
         raw_news = []
+    age_reference = _as_of_reference(as_of)
     headlines = [
         {
             "headline": scrub_headline(n.get("headline", ""), symbol),
             "source": n.get("source", ""),
-            "age_hours": _age_hours(n.get("created_at", "")),
+            "age_hours": _age_hours(n.get("created_at", ""), age_reference),
         }
         for n in raw_news
     ]
@@ -238,7 +245,7 @@ def build_evidence(
     }
 
     # --- regime packet: market-wide only, never the name in question
-    regime = build_regime(api, benchmark)
+    regime = build_regime(api, benchmark, as_of=as_of)
 
     private = {
         "last_close": float(df["c"].iloc[-1]) if len(df) else 0.0,
@@ -248,25 +255,45 @@ def build_evidence(
     return EvidenceBundle(symbol, anonymise(symbol), tech, narrative, regime, private)
 
 
-def _age_hours(ts: str) -> float | None:
+def _as_of_reference(as_of: str | None) -> pd.Timestamp:
+    """The 'now' headline age should be measured against.
+
+    Real time for a live run; the end of the backfilled date otherwise -- a
+    headline from an hour after `as_of` must read as impossibly young (it
+    would be, since it can't exist yet), never as merely "old", so age must
+    be measured from that date's close, not from whenever this code happens
+    to actually run.
+    """
+    if as_of is None:
+        return pd.Timestamp.utcnow()
+    return pd.Timestamp(as_of, tz="UTC") + pd.Timedelta(hours=23, minutes=59, seconds=59)
+
+
+def _age_hours(ts: str, reference: pd.Timestamp | None = None) -> float | None:
     if not ts:
         return None
     try:
         t = pd.to_datetime(ts, utc=True, format="mixed")
-        return round(float((pd.Timestamp.utcnow() - t).total_seconds() / 3600), 1)
+        ref = reference if reference is not None else pd.Timestamp.utcnow()
+        return round(float((ref - t).total_seconds() / 3600), 1)
     except Exception:
         return None
 
 
-_REGIME_CACHE: dict[str, dict] = {}
+_REGIME_CACHE: dict[tuple[str, str | None], dict] = {}
 
 
-def build_regime(api: Alpaca, benchmark: str = "SPY") -> dict[str, Any]:
-    """Cross-asset context. Cached per run because it is identical for every symbol."""
-    if benchmark in _REGIME_CACHE:
-        return _REGIME_CACHE[benchmark]
+def build_regime(api: Alpaca, benchmark: str = "SPY", as_of: str | None = None) -> dict[str, Any]:
+    """Cross-asset context. Cached per (benchmark, as_of) -- identical for every
+    symbol sharing a run, but a backfilled date must NOT reuse another date's
+    cached regime, or every date after the first would silently see the first
+    date's market context.
+    """
+    cache_key = (benchmark, as_of)
+    if cache_key in _REGIME_CACHE:
+        return _REGIME_CACHE[cache_key]
     try:
-        df = bars_to_frame(api.bars(benchmark, "1Day", 120))
+        df = bars_to_frame(api.bars(benchmark, "1Day", 120, as_of=as_of))
         close = df["c"]
         out = {
             "market_proxy": "broad US equity index ETF",
@@ -283,5 +310,5 @@ def build_regime(api: Alpaca, benchmark: str = "SPY") -> dict[str, Any]:
         }
     except Exception as exc:  # a missing benchmark must not kill the run
         out = {"error": str(exc)[:120], "note": "Regime data unavailable; vote flat."}
-    _REGIME_CACHE[benchmark] = out
+    _REGIME_CACHE[cache_key] = out
     return out

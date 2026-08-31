@@ -22,6 +22,16 @@ LIVE_TRADING = "https://api.alpaca.markets"
 DATA = "https://data.alpaca.markets"
 
 
+def _end_of_day(as_of: str) -> datetime:
+    """The last instant of `as_of` (YYYY-MM-DD), UTC.
+
+    This is the lookahead boundary for a backfilled decision: anything with a
+    timestamp after this must never reach a member evaluating that date.
+    """
+    d = datetime.strptime(as_of, "%Y-%m-%d").replace(tzinfo=timezone.utc)
+    return d + timedelta(hours=23, minutes=59, seconds=59)
+
+
 class AlpacaError(RuntimeError):
     pass
 
@@ -101,15 +111,25 @@ class Alpaca:
     def _is_crypto(symbol: str) -> bool:
         return "/" in symbol
 
-    def bars(self, symbol: str, timeframe: str = "1Day", lookback_days: int = 200) -> list[dict]:
+    def bars(
+        self,
+        symbol: str,
+        timeframe: str = "1Day",
+        lookback_days: int = 200,
+        as_of: str | None = None,
+    ) -> list[dict]:
         """Daily/intraday OHLCV.
 
         Note the free-plan gotcha: for US equities, SIP data requires `end` to be
         at least 15 minutes old. We ask for the IEX feed and stop the window
         16 minutes back, so this works on a free account without silently
         returning an empty list. Crypto has no such restriction.
+
+        `as_of`: for a backfilled decision, treat this YYYY-MM-DD date as "now" --
+        `end` becomes that date's close instead of now-minus-16-minutes, so a
+        member evaluating that date can never see a bar from after it.
         """
-        end = datetime.now(timezone.utc) - timedelta(minutes=16)
+        end = _end_of_day(as_of) if as_of else datetime.now(timezone.utc) - timedelta(minutes=16)
         start = end - timedelta(days=lookback_days)
         params: dict[str, Any] = {
             "symbols": symbol,
@@ -142,21 +162,32 @@ class Alpaca:
                 raise AlpacaError(f"No price available for {symbol}")
             return float(bars[-1]["c"])
 
-    def news(self, symbols: list[str], limit: int = 20, lookback_days: int = 5) -> list[dict]:
-        start = (datetime.now(timezone.utc) - timedelta(days=lookback_days)).strftime(
-            "%Y-%m-%dT%H:%M:%SZ"
-        )
-        payload = self._get(
-            DATA,
-            "/v1beta1/news",
-            {
-                "symbols": ",".join(symbols),
-                "limit": limit,
-                "start": start,
-                "sort": "desc",
-                "include_content": "false",
-            },
-        )
+    def news(
+        self,
+        symbols: list[str],
+        limit: int = 20,
+        lookback_days: int = 5,
+        as_of: str | None = None,
+    ) -> list[dict]:
+        """Headlines for `symbols`.
+
+        `as_of`: for a backfilled decision, cap the query at that date's close
+        via the API's own `end` parameter -- without this, the narrative
+        analyst reads headlines published after the date it's supposed to be
+        deciding.
+        """
+        end = _end_of_day(as_of) if as_of else datetime.now(timezone.utc)
+        start = (end - timedelta(days=lookback_days)).strftime("%Y-%m-%dT%H:%M:%SZ")
+        params: dict[str, Any] = {
+            "symbols": ",".join(symbols),
+            "limit": limit,
+            "start": start,
+            "sort": "desc",
+            "include_content": "false",
+        }
+        if as_of:
+            params["end"] = end.strftime("%Y-%m-%dT%H:%M:%SZ")
+        payload = self._get(DATA, "/v1beta1/news", params)
         return payload.get("news", []) or []
 
     # ------------------------------------------------------------------ orders

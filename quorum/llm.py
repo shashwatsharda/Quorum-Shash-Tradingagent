@@ -23,6 +23,16 @@ import requests
 API_URL = "https://api.anthropic.com/v1/messages"
 DEFAULT_MODEL = os.environ.get("QUORUM_MODEL", "claude-sonnet-4-5")
 
+# Approximate list price, $ per million tokens (input, output). For burn-rate
+# visibility during a backfill run, not a billing reconciliation -- it ignores
+# prompt caching and any volume discounts, so it's a ceiling, not an invoice.
+# Falls back to the Sonnet rate for an unlisted model.
+_PRICE_PER_MTOK: dict[str, tuple[float, float]] = {
+    "claude-haiku": (1.0, 5.0),
+    "claude-opus": (15.0, 75.0),
+    "claude-sonnet": (3.0, 15.0),
+}
+
 
 class LLMError(RuntimeError):
     pass
@@ -56,6 +66,14 @@ class LLM:
         self.calls = 0
         self.input_tokens = 0
         self.output_tokens = 0
+
+    @property
+    def estimated_cost_usd(self) -> float:
+        in_rate, out_rate = next(
+            (rates for prefix, rates in _PRICE_PER_MTOK.items() if self.model.startswith(prefix)),
+            _PRICE_PER_MTOK["claude-sonnet"],
+        )
+        return self.input_tokens / 1e6 * in_rate + self.output_tokens / 1e6 * out_rate
 
     def ask(self, system: str, user: str, prefill: str | None = None, temperature: float = 0.3) -> str:
         messages: list[dict[str, Any]] = [{"role": "user", "content": user}]
