@@ -1,0 +1,6 @@
+# Deliberately small. Every dependency is a way for a live demo to fail.
+requests>=2.31
+pandas>=2.0
+numpy>=1.24
+PyYAML>=6.0
+streamlit>=1.30      # only needed for the dashboard (app.py)

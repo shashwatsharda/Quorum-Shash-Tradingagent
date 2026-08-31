@@ -1,0 +1,59 @@
+# Quorum configuration
+#
+# Two things here are worth understanding rather than just editing.
+#
+# 1. The universe mixes US equities and crypto on purpose. US market hours are
+#    19:00-01:30 IST, which is a miserable window to demo in. Alpaca's crypto
+#    data is free and trades 24/7, so BTC/USD and ETH/USD give you a live,
+#    working demo at any hour. Keep both: equities show the sector-concentration
+#    logic, crypto shows fractional sizing and the 24/7 path.
+#
+# 2. The policy block is the constitution. Everything above it proposes;
+#    only this constrains. Change these numbers deliberately, not when a trade
+#    you like gets blocked -- that impulse is precisely what the log exists to
+#    make visible.
+
+paper: true                # never flip this during a hackathon
+feed: iex                  # what the free Alpaca data plan gets in real time
+model: claude-sonnet-4-5
+benchmark: SPY
+lookback_days: 200
+horizon_days: 3            # the window every confidence score is judged over
+debate: true
+atr_stop_multiple: 2.0     # stop distance in ATRs -- 2 is wide enough to survive noise
+reward_risk: 2.0
+log_path: data/decisions.jsonl
+
+universe:
+  - NVDA
+  - AMD
+  - JPM
+  - XOM
+  - LLY
+  - COST
+  - BTC/USD
+  - ETH/USD
+
+# Sector labels drive the concentration cap. Five semiconductor names at 5%
+# each is not a diversified book -- it is one 25% position wearing a disguise.
+sectors:
+  NVDA: semiconductors
+  AMD: semiconductors
+  JPM: financials
+  XOM: energy
+  LLY: healthcare
+  COST: consumer
+  BTC/USD: crypto
+  ETH/USD: crypto
+
+policy:
+  risk_per_trade_pct: 0.75      # equity risked between entry and stop
+  max_position_pct: 10.0        # any single name
+  max_sector_pct: 20.0          # any one sector
+  max_gross_exposure_pct: 60.0  # total invested
+  max_drawdown_pct: 8.0         # circuit breaker: halt new entries beyond this
+  max_new_entries_per_day: 3    # overtrading guard
+  min_confidence: 0.58          # below this the edge does not cover the costs
+  require_stop_loss: true
+  max_stop_distance_pct: 12.0
+  min_order_notional: 10.0
