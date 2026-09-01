@@ -68,21 +68,60 @@ class Alpaca:
     # ---------------------------------------------------------------- plumbing
 
     def _get(self, base: str, path: str, params: dict | None = None) -> dict:
+        """GET with retry-and-backoff for both a 429 and a connection-level
+        failure (timeout, reset, truncated read). A GET has no side effects,
+        so retrying it blindly is always safe -- and without this, a single
+        network blip partway through an hours-long backfill kills the whole
+        run.
+        """
+        last_err = ""
         for attempt in range(3):
-            r = self._s.get(f"{base}{path}", params=params, timeout=self.timeout)
+            try:
+                r = self._s.get(f"{base}{path}", params=params, timeout=self.timeout)
+            except requests.exceptions.RequestException as exc:
+                last_err = f"{type(exc).__name__}: {exc}"[:200]
+                time.sleep(2 ** attempt)
+                continue
             if r.status_code == 429:          # rate limited: back off, don't hammer
+                last_err = f"429: {r.text[:200]}"
                 time.sleep(2 ** attempt)
                 continue
             if r.status_code >= 400:
                 raise AlpacaError(f"GET {path} -> {r.status_code}: {r.text[:300]}")
             return r.json()
-        raise AlpacaError(f"GET {path} rate-limited after 3 attempts")
+        raise AlpacaError(f"GET {path} failed after 3 attempts: {last_err}")
 
     def _post(self, base: str, path: str, body: dict) -> dict:
-        r = self._s.post(f"{base}{path}", json=body, timeout=self.timeout)
-        if r.status_code >= 400:
-            raise AlpacaError(f"POST {path} -> {r.status_code}: {r.text[:300]}")
-        return r.json()
+        """POST with the same connection-level retry as _get, plus 429 handling
+        it didn't have before.
+
+        Retrying a POST is not risk-free the way retrying a GET is: if the
+        connection drops on the way BACK -- a timeout reading the response,
+        say -- the request may already have been processed server-side, and
+        a retry submits it again. That matters most for order creation.
+        Alpaca's own answer is `client_order_id` as an idempotency key
+        (the API rejects a duplicate submitted with the same one); submit_order()
+        below does not currently set one. This retry is still a strict
+        improvement over the old behaviour -- a single network blip killing
+        an hours-long run -- but it is not a substitute for an idempotency
+        key on the caller's side.
+        """
+        last_err = ""
+        for attempt in range(3):
+            try:
+                r = self._s.post(f"{base}{path}", json=body, timeout=self.timeout)
+            except requests.exceptions.RequestException as exc:
+                last_err = f"{type(exc).__name__}: {exc}"[:200]
+                time.sleep(2 ** attempt)
+                continue
+            if r.status_code == 429:
+                last_err = f"429: {r.text[:200]}"
+                time.sleep(2 ** attempt)
+                continue
+            if r.status_code >= 400:
+                raise AlpacaError(f"POST {path} -> {r.status_code}: {r.text[:300]}")
+            return r.json()
+        raise AlpacaError(f"POST {path} failed after 3 attempts: {last_err}")
 
     # ----------------------------------------------------------------- account
 
